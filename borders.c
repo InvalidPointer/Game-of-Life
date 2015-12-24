@@ -56,7 +56,7 @@ dup_borders(borders *b)
     borders *nb = create_borders(b->width, b->height, b->shared);
 
     if (b->shared) {
-        memcpy(nb, b, sizeof(nb));
+        memcpy(nb, b, sizeof(*nb));
     } else {
         *nb->lt_corner = *b->lt_corner; 
         *nb->rt_corner = *b->rt_corner;
