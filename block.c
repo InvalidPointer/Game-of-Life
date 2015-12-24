@@ -5,12 +5,15 @@
 #include "block.h"
 
 block *
-create_block(int width, int height, borders *inner, borders *outer)
+create_block(int width, int height, int row, int column, borders *inner, borders *outer)
 {
     block *b = malloc(sizeof(block));
 
     b->width = width;
     b->height = height;
+
+    b->row = row;
+    b->column = column;
 
     b->arr = malloc((height + 2) * sizeof(*b->arr));
     for (int i = 0; i < (height + 2); i++) {
@@ -42,7 +45,7 @@ destroy_block(block *b, int with_borders)
 
     if (with_borders) {
         destroy_borders(b->inner_borders);
-        destroy_borders(b->outer_borders);
+        //destroy_borders(b->outer_borders);
     }
 
     free(b);
@@ -105,7 +108,7 @@ next_state(block *b, int x, int y)
 block *
 process_block(block *b)
 {    
-    block *nb = create_block(b->width, b->height, b->inner_borders, b->outer_borders);
+    block *nb = create_block(b->width, b->height, b->row, b->column, b->inner_borders, b->outer_borders);
 
     load_borders(nb->inner_borders, b, 1);
     load_borders(nb->outer_borders, b, 0);
@@ -142,15 +145,15 @@ compare_states(block *b1, block *b2)
 void
 load_borders(borders *from, block *to, int offset)
 {
-	if (from->height > to->height + 2 - offset * 2 || from->width > to->width + 2 - offset * 2) {
-		return;
-	}
+    if (from->height > to->height + 2 - offset * 2 || from->width > to->width + 2 - offset * 2) {
+        return;
+    }
     
     unsigned char **arr = to->arr;
     int width = to->width;
     int height = to->height;
 
-	arr[offset][offset] = *from->lt_corner;
+    arr[offset][offset] = *from->lt_corner;
     arr[offset][width + 1 - offset] = *from->rt_corner;
     arr[height + 1 - offset][width + 1 - offset] = *from->rb_corner;
     arr[height + 1 - offset][offset] = *from->lb_corner;
@@ -169,15 +172,15 @@ load_borders(borders *from, block *to, int offset)
 void
 save_borders(borders *to, block *from, int offset)
 {
-	if (to->height < from->height + 2 - offset * 2 || to->width < from->width + 2 - offset * 2) {
-		return;
-	}
+    if (to->height < from->height + 2 - offset * 2 || to->width < from->width + 2 - offset * 2) {
+        return;
+    }
     
     unsigned char **arr = from->arr;
     int width = from->width;
     int height = from->height;
 
-	*to->lt_corner = arr[offset][offset];
+    *to->lt_corner = arr[offset][offset];
     *to->rt_corner = arr[offset][width + 1 - offset];
     *to->rb_corner = arr[height + 1 - offset][width + 1 - offset];
     *to->lb_corner = arr[height + 1 - offset][offset];

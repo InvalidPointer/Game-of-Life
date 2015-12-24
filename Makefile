@@ -6,9 +6,9 @@ BIN = ./bin/
 all: $(BIN)/life-server $(BIN)/life-client
 
 $(BIN)/life-server: $(BIN)/life-server.o $(BIN)/board.o $(BIN)/block.o $(BIN)/borders.o $(BIN)/output.o
-		$(CC) -lncurses -o $(BIN)/life-server $(BIN)/life-server.o $(BIN)/board.o $(BIN)/block.o $(BIN)/borders.o $(BIN)/output.o
+		$(CC) -o $(BIN)/life-server $(BIN)/life-server.o $(BIN)/board.o $(BIN)/block.o $(BIN)/borders.o $(BIN)/output.o
 
-$(BIN)/life-server.o: life-server.c life-server.h board.h output.h | $(BIN)
+$(BIN)/life-server.o: life-server.c commands.h board.h output.h | $(BIN)
 		$(CC) $(CFLAGS) -c -o $(BIN)/life-server.o life-server.c
 
 $(BIN)/board.o: board.c board.h borders.h block.h | $(BIN)
@@ -23,7 +23,11 @@ $(BIN)/borders.o: borders.c borders.h | $(BIN)
 $(BIN)/output.o: output.c output.h board.h | $(BIN)
 		$(CC) $(CFLAGS) -c -o $(BIN)/output.o output.c
 
-$(BIN)/life-client:
+$(BIN)/life-client: $(BIN)/life-client.o
+		$(CC) -o $(BIN)/life-client $(BIN)/life-client.o
+
+$(BIN)/life-client.o: life-client.c commands.h | $(BIN)
+		$(CC) $(CFLAGS) -c -o $(BIN)/life-client.o life-client.c
 
 $(BIN):
 	mkdir -p $(BIN)

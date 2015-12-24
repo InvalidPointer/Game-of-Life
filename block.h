@@ -8,12 +8,15 @@ typedef struct block
     int width;
     int height;
 
+    int row;
+    int column;
+
     unsigned char **arr;
     borders *inner_borders;
     borders *outer_borders;
 } block;
 
-block *create_block(int width, int height, borders *inner, borders *outer);
+block *create_block(int width, int height, int row, int column, borders *inner, borders *outer);
 void destroy_block(block *b, int with_borders);
 
 void clear_block(block *b);

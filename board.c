@@ -1,18 +1,29 @@
 #include "board.h"
 
 #include "borders.h"
+#include "output.h"
 
 #include <stdlib.h>
+#include <unistd.h>
+#include <wait.h>
+
+#include <sys/types.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
+#include <sys/msg.h>
+#include <sys/sem.h>
 
 #include <stdio.h>
+#include <string.h>
+#include <errno.h>
 
-int
+inline int
 get_max(int a, int b)
 {
     return (a > b) ? a : b;
 }
 
-int
+inline int
 check_side(int h, int w, int size, int k)
 {
     return ((w - 1) / size + 1)*((h - 1) / size + 1) - k;
@@ -21,7 +32,7 @@ check_side(int h, int w, int size, int k)
 int
 divide_board(int w, int h, int min, int max, int k)
 {
-	if (min > max) return 0;
+    if (min > max) return 0;
 
     int middle = (min + max) / 2;
     int flag = check_side(h, w, middle, k);
@@ -34,184 +45,269 @@ divide_board(int w, int h, int min, int max, int k)
     }
 }
 
-int
+inline int
 cycl_add(int a, int b, int mod)
 {
-	return (a + b + mod) % mod;
+    return (a + b + mod) % mod;
 }
 
 board *
 create_board(int width, int height, int block_count)
 {
-	board *b = malloc(sizeof(board));
+    board *b = malloc(sizeof(board));
     int size = divide_board(height, width, 1, get_max(height, width), block_count);
-	if (!size) {
-		free(b);
-		return NULL;
-	}
+    if (!size) {
+        free(b);
+        return NULL;
+    }
 
-	b->width = width;
-	b->height = height;
+    b->width = width;
+    b->height = height;
 
     b->block_size = size;
 
-	b->hor_bcount = (width - 1) / size + 1;
-	b->ver_bcount = (height - 1) / size + 1;
+    b->hor_bcount = (width - 1) / size + 1;
+    b->ver_bcount = (height - 1) / size + 1;
 
-	b->workers = malloc(b->ver_bcount * sizeof(*b->workers));
-	for (int i = 0; i < b->ver_bcount; i++) {
-		b->workers[i] = malloc(b->hor_bcount * sizeof(**b->workers));
+    int commid = shmget(IPC_PRIVATE, width, IPC_CREAT | 0666);
+    b->comm = shmat(commid, NULL, 0);
+    shmctl(commid, IPC_RMID, NULL);
 
-		for (int j = 0; j < b->hor_bcount; j++) {
-			for (int k = 0; k < 4; k++) {
-				b->workers[i][j].mem[k] = calloc(size, sizeof(*b->workers[0][0].mem[0]));
-			}
+    b->shmids = malloc(b->ver_bcount * sizeof(*b->shmids));
+    b->msgids = malloc(b->ver_bcount * sizeof(*b->msgids));
+    for (int i = 0; i < b->ver_bcount; i++) {
+        b->shmids[i] = malloc(b->hor_bcount * sizeof(**b->shmids));
+        b->msgids[i] = malloc(b->hor_bcount * sizeof(**b->msgids));
+        for (int j = 0; j < b->hor_bcount; j++) {
+            for (int k = 0; k < 4; k++) {
+                b->shmids[i][j][k] = shmget(IPC_PRIVATE, size, IPC_CREAT | 0666);
+            }
+            b->msgids[i][j] = msgget(IPC_PRIVATE, IPC_CREAT | 0666);
         }
     }
 
+    b->semid = semget(IPC_PRIVATE, 2, IPC_CREAT | 0666);
+
     for (int i = 0; i < b->ver_bcount; i++) {
-		for (int j = 0; j < b->hor_bcount; j++) {
-			int block_width = size;
-			int block_height = size;
+        for (int j = 0; j < b->hor_bcount; j++) {
+            if (!fork()) {
+                int block_width = size;
+                int block_height = size;
+                int ver_bcount = b->ver_bcount;
+                int hor_bcount = b->hor_bcount;
 
-			if (j == b->hor_bcount - 1) {
-				block_width = width - j * size;
-			}
-			if (i == b->ver_bcount - 1) {
-				block_height = height - i * size;
-			}
+                if (j == b->hor_bcount - 1) {
+                    block_width = width - j * size;
+                }
+                if (i == b->ver_bcount - 1) {
+                    block_height = height - i * size;
+                }
 
-			borders *i_borders = create_borders(block_width, block_height, 1);
-			borders *o_borders = create_borders(block_width + 2, block_height + 2, 1);
+                int (**shmids)[4] = b->shmids;
+                int msgid = b->msgids[i][j];
+                int semid = b->semid;
+                char *comm = b->comm;
 
-			i_borders->top = b->workers[i][j].mem[TOP_NUM] + 1;
-			i_borders->right = b->workers[i][j].mem[RIGHT_NUM] + 1;
-			i_borders->bot = b->workers[i][j].mem[BOT_NUM] + 1;
-			i_borders->left = b->workers[i][j].mem[LEFT_NUM] + 1;
+                borders *i_borders = create_borders(block_width, block_height, 1);
+                borders *o_borders = create_borders(block_width + 2, block_height + 2, 1);
 
-			i_borders->lt_corner = b->workers[i][j].mem[LT_NUM];
-			i_borders->rt_corner = b->workers[i][j].mem[RT_NUM];
-			i_borders->rb_corner = b->workers[i][j].mem[RB_NUM] + block_width - 1;
-			i_borders->lb_corner = b->workers[i][j].mem[LB_NUM] + block_height - 1;
+                i_borders->lt_corner = (char *)shmat(shmids[i][j][LT_NUM], NULL, 0);
+                i_borders->rt_corner = (char *)shmat(shmids[i][j][RT_NUM], NULL, 0);
+                i_borders->rb_corner = (char *)shmat(shmids[i][j][RB_NUM], NULL, 0) + block_width - 1;
+                i_borders->lb_corner = (char *)shmat(shmids[i][j][LB_NUM], NULL, 0) + block_height - 1;
 
-			o_borders->top = b->workers[cycl_add(i, -1, b->ver_bcount)][j].mem[BOT_NUM];
-			o_borders->right = b->workers[i][cycl_add(j, 1, b->hor_bcount)].mem[LEFT_NUM];
-			o_borders->bot = b->workers[cycl_add(i, 1, b->ver_bcount)][j].mem[TOP_NUM];
-			o_borders->left = b->workers[i][cycl_add(j, -1, b->hor_bcount)].mem[RIGHT_NUM];
+                i_borders->top = i_borders->lt_corner + 1;
+                i_borders->right = i_borders->rt_corner + 1;
+                i_borders->bot = i_borders->rb_corner - block_width + 2;
+                i_borders->left = i_borders->lb_corner - block_height + 2;
 
-			o_borders->lt_corner = b->workers[cycl_add(i, -1, b->ver_bcount)][cycl_add(j, -1, b->hor_bcount)].mem[RB_NUM] + block_width - 1;
-			o_borders->rt_corner = b->workers[cycl_add(i, -1, b->ver_bcount)][cycl_add(j, 1, b->hor_bcount)].mem[LB_NUM] + block_height - 1;
-			o_borders->rb_corner = b->workers[cycl_add(i, 1, b->ver_bcount)][cycl_add(j, 1, b->hor_bcount)].mem[LT_NUM];
-			o_borders->lb_corner = b->workers[cycl_add(i, 1, b->ver_bcount)][cycl_add(j, -1, b->hor_bcount)].mem[RT_NUM];
+                int t_ind = cycl_add(i, -1, ver_bcount);
+                int b_ind = cycl_add(i, 1, ver_bcount);
+                int l_ind = cycl_add(j, -1, hor_bcount);
+                int r_ind = cycl_add(j, 1, hor_bcount);
 
-			b->workers[i][j].bk = create_block(block_width, block_height, i_borders, o_borders);
-		}
-	}
+                o_borders->top = (char *)shmat(shmids[t_ind][j][BOT_NUM], NULL, 0);
+                o_borders->right = (char *)shmat(shmids[i][r_ind][LEFT_NUM], NULL, 0);
+                o_borders->bot = (char *)shmat(shmids[b_ind][j][TOP_NUM], NULL, 0);
+                o_borders->left = (char *)shmat(shmids[i][l_ind][RIGHT_NUM], NULL, 0);
 
-	return b;
+                o_borders->lt_corner = (char *)shmat(shmids[t_ind][l_ind][RB_NUM], NULL, 0) + block_width - 1;
+                o_borders->rt_corner = (char *)shmat(shmids[t_ind][r_ind][LB_NUM], NULL, 0) + block_height - 1;
+                o_borders->rb_corner = (char *)shmat(shmids[b_ind][r_ind][LT_NUM], NULL, 0);
+                o_borders->lb_corner = (char *)shmat(shmids[b_ind][l_ind][RT_NUM], NULL, 0);
+
+                block *w_block = create_block(block_width, block_height, i, j, i_borders, o_borders);
+                
+                for (int i = 0; i < b->ver_bcount; i++) {
+                    free(b->shmids[i]);
+                    free(b->msgids[i]);
+                }
+                free(b->shmids);
+                free(b->msgids);
+                free(b);
+
+                msgbuf mbuf;
+                struct sembuf sbuf = {0, -1, 0};
+
+                while (1) {
+                    msgrcv(msgid, &mbuf, MSG_SIZE, 0, 0);
+                    switch(mbuf.mtype)
+                    {
+                        case CMD_ADD: ;
+                            int x = 0, y = 0;
+                            sscanf(mbuf.mtext, "%d %d", &x, &y);
+                            block_place_cell(w_block, x, y);
+                            break;
+                        case CMD_WRK: ;
+                            sbuf.sem_num = 0;
+                            sbuf.sem_op = -1;
+                            semop(semid, &sbuf, 1);
+
+                            block *nw_block = process_block(w_block);
+                            destroy_block(w_block, 0);
+                            w_block = nw_block;
+
+                            sbuf.sem_num = 1;
+                            sbuf.sem_op = 1;
+                            semop(semid, &sbuf, 1);
+                            break;
+                        case CMD_UPDT:
+                            update_borders(w_block);
+                            break;
+                        case CMD_PRNT: ;
+                            sbuf.sem_num = 0;
+                            sbuf.sem_op = -1;
+                            semop(semid, &sbuf, 1);
+
+                            int num = 0;
+                            sscanf(mbuf.mtext, "%d", &num);
+                            memcpy(comm + w_block->column * size, w_block->arr[num + 1] + 1, w_block->width);
+
+                            sbuf.sem_num = 1;
+                            sbuf.sem_op = 1;
+                            semop(semid, &sbuf, 1);
+
+                            break;
+                        case CMD_CLR:
+                            clear_block(w_block);
+                            break;
+                        case CMD_END:
+                            shmdt(comm);
+                            destroy_block(w_block, 1);
+                            exit(0);
+                            break;
+                        default:
+                            continue;
+                    }
+                }
+            }
+        }
+    }
+
+    return b;
 }
 
 void
-destroy_board(board *b, int finally)
-{
-	for (int i = 0; i < b->ver_bcount; i++) {
-		for (int j = 0; j < b->hor_bcount; j++) {
-			destroy_block(b->workers[i][j].bk, finally);
-			if (finally) {
-				for (int k = 0; k < 4; k++) {
-					free(b->workers[i][j].mem[k]);
-				}
-			}
-		}
-		free(b->workers[i]);
-	}
-	free(b->workers);
+destroy_board(board *b)
+{   
+    b->msg_buf.mtype = CMD_END;
+
+    shmdt(b->comm);
+    for (int i = 0; i < b->ver_bcount; i++) {
+        for (int j = 0; j < b->hor_bcount; j++) {
+            msgsnd(b->msgids[i][j], &b->msg_buf, MSG_SIZE, 0);
+            wait(NULL);
+
+            for (int k = 0; k < 4; k++) {
+                shmctl(b->shmids[i][j][k], IPC_RMID, NULL);
+            }
+            msgctl(b->msgids[i][j], IPC_RMID, NULL);
+        }
+        free(b->shmids[i]);
+        free(b->msgids[i]);
+    }
+
+    free(b->shmids);
+    free(b->msgids);
     free(b);
 }
 
 void
 clear_board(board *b)
 {
+    b->msg_buf.mtype = CMD_CLR;
     for (int i = 0; i < b->ver_bcount; i++) {
-		for (int j = 0; j < b->hor_bcount; j++) {
-            clear_block(b->workers[i][j].bk);
+        for (int j = 0; j < b->hor_bcount; j++) {
+            msgsnd(b->msgids[i][j], &b->msg_buf, MSG_SIZE, 0);
         }
     }
-}
-
-board *
-dup_board(board *b)
-{
-	board *nb = malloc(sizeof(board));
-
-	nb->width = b->width;
-    nb->height = b->height;
-
-    nb->block_size = b->block_size;
-    nb->hor_bcount = b->hor_bcount;
-    nb->ver_bcount = b->ver_bcount;
-
-    nb->workers = malloc(nb->ver_bcount * sizeof(*nb->workers));
-    for (int i = 0; i < nb->ver_bcount; i++) {
-		nb->workers[i] = malloc(nb->hor_bcount * sizeof(**nb->workers));
-
-		for (int j = 0; j < nb->hor_bcount; j++) {
-			for (int k = 0; k < 4; k++) {
-				nb->workers[i][j].mem[k] = b->workers[i][j].mem[k];
-			}
-		}
-	}
-
-	return nb;
 }
 
 void
 place_cell(board *b, int x, int y)
 {
-	if (x >= 0 && x < b->width && y >= 0 && y < b->height)
-	{
+    if (x >= 0 && x < b->width && y >= 0 && y < b->height)
+    {
         int size = b->block_size;
-		int row = y / size;
-		int column = x / size;
+        int row = y / size;
+        int column = x / size;
 
-		block_place_cell(b->workers[row][column].bk, x - size * column, y - size * row);
-	}
+        b->msg_buf.mtype = CMD_ADD;
+        sprintf(b->msg_buf.mtext, "%d %d", x - size * column, y - size * row);
+        msgsnd(b->msgids[row][column], &b->msg_buf, MSG_SIZE, 0);
+    }
 }
 
-board *
+void
 next_generation(board *b)
 {
-	board *nb = dup_board(b);
+    struct sembuf sbuf = {0, b->hor_bcount * b->ver_bcount, 0};
+    semop(b->semid, &sbuf, 1);
 
-	for (int i = 0; i < nb->ver_bcount; i++) {
-		for (int j = 0; j < nb->hor_bcount; j++) {
-			nb->workers[i][j].bk = process_block(b->workers[i][j].bk);
-		}
-	}
-
-	for (int i = 0; i < nb->ver_bcount; i++) {
-		for (int j = 0; j < nb->hor_bcount; j++) {
-			update_borders(nb->workers[i][j].bk);
-		}
-	}
-
-	return nb;
-}
-
-int
-compare_generations(board *b1, board *b2)
-{
-    if (b1->width != b2->width || b1->height != b2->height || b1->block_size != b2->block_size) {
-        return 1;
+    b->msg_buf.mtype = CMD_WRK;
+    for (int i = 0; i < b->ver_bcount; i++) {
+        for (int j = 0; j < b->hor_bcount; j++) {
+            msgsnd(b->msgids[i][j], &b->msg_buf, MSG_SIZE, 0);
+        }
     }
 
-    for (int i = 0; i < b1->ver_bcount; i++) {
-		for (int j = 0; j < b1->hor_bcount; j++) {
-			if (compare_states(b1->workers[i][j].bk, b2->workers[i][j].bk)) {
-                return 1;
-            }
-		}
-	}
+    sbuf.sem_num = 1;
+    sbuf.sem_op = -sbuf.sem_op;
+    semop(b->semid, &sbuf, 1);
 
-    return 0;
+    b->msg_buf.mtype = CMD_UPDT;
+    for (int i = 0; i < b->ver_bcount; i++) {
+        for (int j = 0; j < b->hor_bcount; j++) {
+            msgsnd(b->msgids[i][j], &b->msg_buf, MSG_SIZE, 0);
+        }
+    }
+}
+
+void
+print_board(board *b)
+{
+    b->msg_buf.mtype = CMD_PRNT;
+
+    int size = b->block_size;
+    int height = size;
+    for (int i = 0; i < b->ver_bcount; i++) {
+        if (i == b->ver_bcount - 1) {
+            height = b->height - i * size;
+        }
+        for (int num = 0; num < height; num++) {
+            struct sembuf sbuf = {0, b->hor_bcount, 0};
+            semop(b->semid, &sbuf, 1);
+            for (int j = 0; j < b->hor_bcount; j++) {
+                sprintf(b->msg_buf.mtext, "%d", num);
+                msgsnd(b->msgids[i][j], &b->msg_buf, MSG_SIZE, 0);
+            }
+            sbuf.sem_num = 1;
+            sbuf.sem_op = -sbuf.sem_op;
+            semop(b->semid, &sbuf, 1);
+
+            print_row(b->comm, b->width);
+        }
+    }
+    printf("\n");
+    fflush(stdout);
 }

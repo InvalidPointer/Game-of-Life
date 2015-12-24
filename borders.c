@@ -2,6 +2,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <sys/shm.h>
 
 borders *
 create_borders(int width, int height, unsigned char shared)
@@ -39,6 +40,11 @@ destroy_borders(borders *b)
         free(b->rt_corner);
         free(b->rb_corner);
         free(b->lb_corner);
+    } else {
+        shmdt(b->top - 1);
+        shmdt(b->right - 1);
+        shmdt(b->bot - 1);
+        shmdt(b->left - 1);
     }
     
     free(b);

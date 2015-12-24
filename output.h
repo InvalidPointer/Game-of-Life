@@ -3,10 +3,6 @@
 
 #include "board.h"
 
-void init(void);
-void destroy(void);
-char get_ch(void);
-
-void print_board(board *b, int animate);
+void print_row(char *row, int len);
 
 #endif //OUTPUT_H

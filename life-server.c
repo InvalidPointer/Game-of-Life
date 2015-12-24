@@ -1,54 +1,74 @@
 #include <unistd.h>
-#include <ncurses.h>
+#include <stdlib.h>
+#include <stdio.h>
 
-#include "life-server.h"
+#include "commands.h"
 #include "output.h"
 #include "board.h"
 
 int
 main(int argc, char **argv)
 {
-    init();
+    if (argc < 4) {
+        printf("Missing some input parameters!\nUsage: life-server [height] [width] [workers count].\n");
+        return 0;
+    }
 
-    board *b = create_board(10, 10, 4);
-    clear_board(b);
+    int width = 0, height = 0, w_count = 0;
+    height = atoi(argv[1]);
+    width = atoi(argv[2]);
+    w_count = atoi(argv[3]);
 
-    //Glider
-    place_cell(b, 1, 0);
-    place_cell(b, 2, 1);
-    place_cell(b, 0, 2);
-    place_cell(b, 1, 2);
-    place_cell(b, 2, 2);
+    if (width <= 0 || height <= 0 || w_count <= 0) {
+        printf("Incorrect parameters!\n");
+        return 0;
+    }
 
-    //Still
-    /*place_cell(b, 0, 0);
-    place_cell(b, 0, 1);
-    place_cell(b, 1, 0);
-    place_cell(b, 1, 1);*/
+    board *b = create_board(width, height, w_count);
+    if (b == NULL) {
+        printf("Board can not be divided! Exitting.\n");
+        return 0;
+    }
 
-    print_board(b, 0);
+    key_t key = ftok("life-server", 1);
+    int msgid = msgget(key, IPC_CREAT | 0666);
+    cmdbuf mbuf;
 
-    board *nb;
-    for (int i = 0; i < 1000; i++) {
-        usleep(100000);
-        nb = next_generation(b);
-
-        if (!compare_generations(b, nb)) {
-            printw("Simulation finished! Stable state achieved!\n");
-            destroy_board(b, 0);
-            break;
+    int count = 0;
+    while (1) {
+        if (count) {
+            next_generation(b);
+            count--;
         }
 
-        print_board(nb, 1);
-                
-        destroy_board(b, 0);
-        b = nb;
+        msgrcv(msgid, &mbuf, CMD_SIZE, 0, 0);        
+        switch(mbuf.mtype)
+        {
+            case S_ADD: ;
+                int x = 0, y = 0;
+                sscanf(mbuf.mtext, "%d %d", &x, &y);
+                place_cell(b, x, y);
+                break;
+            case S_CLEAR:
+                clear_board(b);
+                break;
+            case S_START: ;
+                sscanf(mbuf.mtext, "%d", &count);
+                break;
+            case S_STOP:
+                count = 0;
+                break;
+            case S_SNAPSHOT:
+                print_board(b);
+                break;
+            case S_QUIT:
+                destroy_board(b);
+                msgctl(msgid, IPC_RMID, NULL);
+                return 0;
+            default:
+                continue;
+        }
     }
-    destroy_board(nb, 1);
-
-    get_ch();
-
-    destroy();
 
     return 0;
 }
